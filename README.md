@@ -4,7 +4,6 @@ TeleWoW is a Windows-first Python Telegram bot for monitoring and controlling a 
 
 Clone this repository into the repack root directory. The repository folder must be named `tele-wow` and must sit next to `Repack` and `Database`. Relative paths in `.env` are resolved from the `tele-wow` folder, so the default paths intentionally use `../Repack` and `../Database`.
 
-Repository: https://github.com/timoinglin/tele-wow
 
 ## Table of contents
 
@@ -35,13 +34,16 @@ Repository: https://github.com/timoinglin/tele-wow
 - Cleaner dashboard-style main panel with reduced bot message clutter
 
 ## Preview
-
+Main dashboard
 ![Main dashboard](screenshots/1_main_dashboard.jpg)
 
+Server status
 ![Server status](screenshots/2_server_status.jpg)
 
+Remote Access
 ![Remote actions](screenshots/3_remote_actions.jpg)
 
+Crash alert example
 ![Crash detected alert](screenshots/4_crash_detected.jpg)
 
 ## Project layout
