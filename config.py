@@ -17,6 +17,15 @@ class DatabaseConfig:
 
 
 @dataclass(frozen=True)
+class RemoteAccessConfig:
+    host: str
+    port: int
+    username: str
+    password: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     key: str
     display_name: str
@@ -35,6 +44,7 @@ class AppConfig:
     poll_interval_seconds: int
     monitor_disk_path: Path
     database: DatabaseConfig
+    remote_access: RemoteAccessConfig
     mysql: ServiceConfig
     auth: ServiceConfig
     world: ServiceConfig
@@ -114,6 +124,14 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         database=_require_env("DB_NAME", "mop_auth"),
     )
 
+    remote_access = RemoteAccessConfig(
+        host=_require_env("RA_HOST", "127.0.0.1"),
+        port=_load_int("RA_PORT", 3443),
+        username=_require_env("RA_USERNAME", "replace-with-your-ra-account"),
+        password=_require_env("RA_PASSWORD", "replace-with-your-ra-password"),
+        timeout_seconds=_load_int("RA_TIMEOUT_SECONDS", 10),
+    )
+
     mysql_working_dir = _resolve_path(
         _require_env("MYSQL_WORKING_DIR", "../Database/_Server"),
         base_path=repo_root,
@@ -149,6 +167,7 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         poll_interval_seconds=poll_interval_seconds,
         monitor_disk_path=monitor_disk_path,
         database=database,
+        remote_access=remote_access,
         mysql=ServiceConfig(
             key="mysql",
             display_name="MySQL",

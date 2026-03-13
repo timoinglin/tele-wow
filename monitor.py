@@ -68,6 +68,8 @@ class ProcessMonitor:
                         display_name=service.display_name,
                         running=False,
                         pid=None,
+                        started_at=None,
+                        memory_mb=None,
                     )
                 )
 
@@ -138,6 +140,35 @@ class ServerController:
 
         service = self._config.services[service_key]
         return self._restart_single_service(service)
+
+    def stop_service(self, service_key: str) -> list[str]:
+        if service_key == "mysql":
+            return self._stop_mysql_stack()
+        if service_key == "auth":
+            return self._stop_auth_stack()
+
+        service = self._config.services[service_key]
+        return self._stop_single_service(service)
+
+    def _stop_mysql_stack(self) -> list[str]:
+        messages: list[str] = []
+        statuses = self.get_service_statuses()
+
+        if statuses["world"].running:
+            messages.extend(self._stop_single_service(self._config.world))
+        if statuses["auth"].running:
+            messages.extend(self._stop_single_service(self._config.auth))
+        messages.extend(self._stop_single_service(self._config.mysql))
+        return messages
+
+    def _stop_auth_stack(self) -> list[str]:
+        messages: list[str] = []
+        statuses = self.get_service_statuses()
+
+        if statuses["world"].running:
+            messages.extend(self._stop_single_service(self._config.world))
+        messages.extend(self._stop_single_service(self._config.auth))
+        return messages
 
     def _restart_mysql_stack(self) -> list[str]:
         messages: list[str] = []

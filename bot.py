@@ -5,11 +5,21 @@ from datetime import datetime
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.error import BadRequest, TelegramError
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from config import AppConfig, load_config
 from database import DatabaseClient
 from monitor import ProcessMonitor, ServerController
+from ra import RemoteAccessClient, RemoteAccessError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -22,7 +32,10 @@ def build_main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📊 System Stats", callback_data="menu:stats"),
                 InlineKeyboardButton("🎮 Server Status", callback_data="menu:status"),
             ],
-            [InlineKeyboardButton("⚡ Quick Actions", callback_data="menu:quick")],
+            [
+                InlineKeyboardButton("⚡ Quick Actions", callback_data="menu:quick"),
+                InlineKeyboardButton("🌐 Remote Access", callback_data="menu:remote"),
+            ],
             [InlineKeyboardButton("👤 Account Creator", callback_data="menu:account")],
         ]
     )
@@ -57,20 +70,65 @@ def build_quick_actions_menu() -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton("▶ MySQL", callback_data="action:start:mysql"),
-                InlineKeyboardButton("🔄 MySQL", callback_data="action:restart:mysql"),
+                InlineKeyboardButton("🛑 MySQL", callback_data="confirm:service:stop:mysql"),
+                InlineKeyboardButton("🔄 MySQL", callback_data="confirm:service:restart:mysql"),
             ],
             [
                 InlineKeyboardButton("▶ Auth", callback_data="action:start:auth"),
-                InlineKeyboardButton("🔄 Auth", callback_data="action:restart:auth"),
+                InlineKeyboardButton("🛑 Auth", callback_data="confirm:service:stop:auth"),
+                InlineKeyboardButton("🔄 Auth", callback_data="confirm:service:restart:auth"),
             ],
             [
                 InlineKeyboardButton("▶ World", callback_data="action:start:world"),
-                InlineKeyboardButton("🔄 World", callback_data="action:restart:world"),
+                InlineKeyboardButton("🛑 World", callback_data="confirm:service:stop:world"),
+                InlineKeyboardButton("🔄 World", callback_data="confirm:service:restart:world"),
             ],
             [
                 InlineKeyboardButton("🎮 Status", callback_data="menu:status"),
                 InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
             ],
+        ]
+    )
+
+
+def build_remote_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("ℹ Server Info", callback_data="ra:server_info"),
+                InlineKeyboardButton("💾 Save All", callback_data="ra:saveall"),
+            ],
+            [
+                InlineKeyboardButton("📣 Announce", callback_data="ra:announce"),
+                InlineKeyboardButton("🛑 Shutdown", callback_data="ra:shutdown"),
+            ],
+            [
+                InlineKeyboardButton("👤 Account Creator", callback_data="menu:account"),
+                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
+            ],
+        ]
+    )
+
+
+def build_account_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Create Account", callback_data="ra:account_create")],
+            [
+                InlineKeyboardButton("🌐 Remote Access", callback_data="menu:remote"),
+                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
+            ],
+        ]
+    )
+
+
+def build_confirm_menu(confirm_data: str, cancel_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data=confirm_data),
+                InlineKeyboardButton("⬅ Cancel", callback_data=cancel_data),
+            ]
         ]
     )
 
@@ -90,6 +148,50 @@ def get_monitor(context: ContextTypes.DEFAULT_TYPE) -> ProcessMonitor:
 
 def get_database(context: ContextTypes.DEFAULT_TYPE) -> DatabaseClient:
     return context.application.bot_data["database"]
+
+
+def get_remote_access(context: ContextTypes.DEFAULT_TYPE) -> RemoteAccessClient:
+    return context.application.bot_data["remote_access"]
+
+
+def remember_panel_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
+    context.user_data["panel_chat_id"] = chat_id
+    context.user_data["panel_message_id"] = message_id
+
+
+async def render_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    chat_id = context.user_data.get("panel_chat_id")
+    message_id = context.user_data.get("panel_message_id")
+
+    if chat_id and message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return
+        except BadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return
+            context.user_data.pop("panel_chat_id", None)
+            context.user_data.pop("panel_message_id", None)
+        except TelegramError:
+            context.user_data.pop("panel_chat_id", None)
+            context.user_data.pop("panel_message_id", None)
+
+    message = update.effective_message
+    if message is None:
+        return
+
+    sent_message = await message.reply_text(text, reply_markup=reply_markup)
+    remember_panel_message(context, sent_message.chat_id, sent_message.message_id)
 
 
 async def whoami_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -123,10 +225,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_authorized(update, config):
         return
 
-    await update.effective_message.reply_text(
-        build_main_text(config),
-        reply_markup=build_main_menu(),
-    )
+    text = await build_main_text(context)
+    await render_panel(update, context, text, build_main_menu())
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -136,7 +236,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     controller = get_controller(context)
     stats = await asyncio.to_thread(controller.get_system_stats)
-    await update.effective_message.reply_text(format_stats(stats), reply_markup=build_stats_menu())
+    await render_panel(update, context, format_stats(stats), build_stats_menu())
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -144,11 +244,107 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_authorized(update, config):
         return
 
-    statuses, database_online = await get_status_snapshot(context)
-    await update.effective_message.reply_text(
-        format_statuses(statuses, database_online),
-        reply_markup=build_status_menu(),
-    )
+    statuses, database_online, ra_online = await get_status_snapshot(context)
+    await render_panel(update, context, format_statuses(statuses, database_online, ra_online), build_status_menu())
+
+
+async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    config: AppConfig = context.application.bot_data["config"]
+    if not is_authorized(update, config):
+        return
+
+    message = update.effective_message
+    if message is None or message.text is None:
+        return
+
+    pending_action = context.user_data.get("pending_action")
+    if not pending_action:
+        return
+
+    text = message.text.strip()
+    if text.lower() == "cancel":
+        context.user_data.pop("pending_action", None)
+        text = await build_main_text(context)
+        await render_panel(update, context, text, build_main_menu())
+        return
+
+    action_type = pending_action.get("type")
+    if action_type == "announce_text":
+        context.user_data["pending_action"] = {"type": "announce_confirm", "text": text}
+        await render_panel(
+            update,
+            context,
+            f"📣 Confirm Announce\n\n{text}",
+            build_confirm_menu("execute:ra:announce", "menu:remote"),
+        )
+        return
+
+    if action_type == "shutdown_delay":
+        try:
+            delay = int(text)
+        except ValueError:
+            await render_panel(
+                update,
+                context,
+                "Send the shutdown delay in seconds, or send cancel.",
+                build_remote_menu(),
+            )
+            return
+
+        context.user_data["pending_action"] = {"type": "shutdown_confirm", "delay": delay}
+        await render_panel(
+            update,
+            context,
+            f"🛑 Confirm Shutdown\n\nShutdown the server in {delay} seconds?",
+            build_confirm_menu(f"execute:ra:shutdown:{delay}", "menu:remote"),
+        )
+        return
+
+    if action_type == "account_username":
+        if " " in text:
+            await render_panel(
+                update,
+                context,
+                "Username cannot contain spaces. Send a username or send cancel.",
+                build_account_menu(),
+            )
+            return
+        context.user_data["pending_action"] = {"type": "account_password", "username": text}
+        await render_panel(
+            update,
+            context,
+            f"Username saved: {text}\nNow send the password for the new account, or send cancel.",
+            build_account_menu(),
+        )
+        return
+
+    if action_type == "account_password":
+        username = pending_action.get("username")
+        if not username:
+            context.user_data.pop("pending_action", None)
+            await render_panel(update, context, "Account creation state was lost. Start again.", build_account_menu())
+            return
+        if " " in text:
+            await render_panel(
+                update,
+                context,
+                "Password cannot contain spaces. Send a password or send cancel.",
+                build_account_menu(),
+            )
+            return
+
+        context.user_data["pending_action"] = {
+            "type": "account_confirm",
+            "username": username,
+            "password": text,
+        }
+        await render_panel(
+            update,
+            context,
+            f"👤 Confirm Account Creation\n\nCreate account: {username}\nPassword: hidden",
+            build_confirm_menu("execute:ra:account_create", "menu:account"),
+        )
+        return
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -163,36 +359,129 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await query.answer()
+    remember_panel_message(context, query.message.chat_id, query.message.message_id)
 
     if query.data == "menu:main":
-        config = context.application.bot_data["config"]
-        await query.edit_message_text(build_main_text(config), reply_markup=build_main_menu())
+        context.user_data.pop("pending_action", None)
+        text = await build_main_text(context)
+        await query.edit_message_text(text, reply_markup=build_main_menu())
         return
 
     if query.data == "menu:quick":
+        context.user_data.pop("pending_action", None)
         await query.edit_message_text(build_quick_actions_text(), reply_markup=build_quick_actions_menu())
         return
 
+    if query.data == "menu:remote":
+        context.user_data.pop("pending_action", None)
+        await query.edit_message_text(build_remote_text(), reply_markup=build_remote_menu())
+        return
+
     if query.data == "menu:stats":
+        context.user_data.pop("pending_action", None)
         controller = get_controller(context)
         stats = await asyncio.to_thread(controller.get_system_stats)
         await query.edit_message_text(format_stats(stats), reply_markup=build_stats_menu())
         return
 
     if query.data == "menu:status":
-        statuses, database_online = await get_status_snapshot(context)
-        await query.edit_message_text(format_statuses(statuses, database_online), reply_markup=build_status_menu())
+        context.user_data.pop("pending_action", None)
+        statuses, database_online, ra_online = await get_status_snapshot(context)
+        await query.edit_message_text(
+            format_statuses(statuses, database_online, ra_online),
+            reply_markup=build_status_menu(),
+        )
         return
 
     if query.data == "menu:account":
-        database = get_database(context)
-        is_online = await asyncio.to_thread(database.ping)
+        context.user_data.pop("pending_action", None)
         text = (
             "👤 Account Creator\n\n"
-            "This panel is currently unavailable.\n"
-            f"Database reachability: {'online' if is_online else 'offline'}."
+            "Create a new WoW account through Remote Access.\n"
+            "Press Create Account and then reply with the username and password in chat.\n"
+            "You will get a confirmation step before the command is sent.\n"
+            "Send cancel at any prompt to stop."
         )
-        await query.edit_message_text(text, reply_markup=build_main_menu())
+        await query.edit_message_text(text, reply_markup=build_account_menu())
+        return
+
+    if query.data == "ra:server_info":
+        result = await run_ra_command(context, "server info")
+        await query.edit_message_text(format_ra_result("Server Info", result), reply_markup=build_remote_menu())
+        return
+
+    if query.data == "ra:saveall":
+        result = await run_ra_command(context, "saveall")
+        await query.edit_message_text(format_ra_result("Save All", result), reply_markup=build_remote_menu())
+        return
+
+    if query.data == "ra:announce":
+        context.user_data["pending_action"] = {"type": "announce_text"}
+        await query.edit_message_text(
+            "📣 Announce\n\nSend the announcement text in chat, or send cancel.",
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    if query.data == "ra:shutdown":
+        context.user_data["pending_action"] = {"type": "shutdown_delay"}
+        await query.edit_message_text(
+            "🛑 Shutdown\n\nSend the shutdown delay in seconds, or send cancel.",
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    if query.data == "ra:account_create":
+        context.user_data["pending_action"] = {"type": "account_username"}
+        await query.edit_message_text(
+            "👤 Account Creator\n\nSend the new account username in chat, or send cancel.",
+            reply_markup=build_account_menu(),
+        )
+        return
+
+    if query.data.startswith("confirm:service:"):
+        _, _, action, service_key = query.data.split(":", 3)
+        text = format_service_confirmation(action, service_key)
+        await query.edit_message_text(
+            text,
+            reply_markup=build_confirm_menu(
+                f"execute:service:{action}:{service_key}",
+                "menu:quick",
+            ),
+        )
+        return
+
+    if query.data == "execute:ra:announce":
+        pending_action = context.user_data.pop("pending_action", {})
+        announce_text = pending_action.get("text", "")
+        result = await run_ra_command(context, f"announce {announce_text}")
+        await query.edit_message_text(format_ra_result("Announce", result), reply_markup=build_remote_menu())
+        return
+
+    if query.data.startswith("execute:ra:shutdown:"):
+        context.user_data.pop("pending_action", None)
+        delay = query.data.rsplit(":", 1)[1]
+        result = await run_ra_command(context, f"server shutdown {delay}")
+        await query.edit_message_text(format_ra_result("Shutdown", result), reply_markup=build_remote_menu())
+        return
+
+    if query.data == "execute:ra:account_create":
+        pending_action = context.user_data.pop("pending_action", {})
+        username = pending_action.get("username")
+        password = pending_action.get("password")
+        if not username or not password:
+            await query.edit_message_text("Account creation state was lost. Start again.", reply_markup=build_account_menu())
+            return
+        result = await run_ra_command(context, f"account create {username} {password}")
+        await query.edit_message_text(format_ra_result("Account Create", result), reply_markup=build_account_menu())
+        return
+
+    if query.data.startswith("execute:service:"):
+        _, _, action, service_key = query.data.split(":", 3)
+        controller = get_controller(context)
+        result_lines = await asyncio.to_thread(run_service_action, controller, action, service_key)
+        text = format_action_result(action, service_key, result_lines)
+        await query.edit_message_text(text, reply_markup=build_quick_actions_menu())
         return
 
     if query.data.startswith("action:"):
@@ -211,6 +500,8 @@ def run_service_action(controller: ServerController, action: str, service_key: s
         return controller.start_service(service_key)
     if action == "restart":
         return controller.restart_service(service_key)
+    if action == "stop":
+        return controller.stop_service(service_key)
     raise ValueError(f"Unsupported action: {action}")
 
 
@@ -237,30 +528,72 @@ async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     LOGGER.exception("Unhandled Telegram error", exc_info=context.error)
 
 
-async def get_status_snapshot(context: ContextTypes.DEFAULT_TYPE) -> tuple[dict[str, object], bool]:
+async def get_status_snapshot(context: ContextTypes.DEFAULT_TYPE) -> tuple[dict[str, object], bool, bool]:
     controller = get_controller(context)
     database = get_database(context)
-    statuses, database_online = await asyncio.gather(
+    remote_access = get_remote_access(context)
+    statuses, database_online, ra_online = await asyncio.gather(
         asyncio.to_thread(controller.get_service_statuses),
         asyncio.to_thread(database.ping),
+        asyncio.to_thread(remote_access.ping),
     )
-    return statuses, database_online
+    return statuses, database_online, ra_online
 
 
-def build_main_text(config: AppConfig) -> str:
+async def run_ra_command(context: ContextTypes.DEFAULT_TYPE, command: str) -> str:
+    remote_access = get_remote_access(context)
+    try:
+        result = await asyncio.to_thread(remote_access.run_command, command)
+        return result.output or "Command completed with no output."
+    except RemoteAccessError as exc:
+        return f"RA error: {exc}"
+    except OSError as exc:
+        return f"Connection error: {exc}"
+
+
+async def build_main_text(context: ContextTypes.DEFAULT_TYPE) -> str:
+    config: AppConfig = context.application.bot_data["config"]
+    controller = get_controller(context)
+    (statuses, database_online, ra_online), stats = await asyncio.gather(
+        get_status_snapshot(context),
+        asyncio.to_thread(controller.get_system_stats),
+    )
+    running_count = sum(1 for status in statuses.values() if status.running)
+
     return (
         "TeleWoW Control Panel\n"
-        f"Allowed users: {len(config.allowed_user_ids)}\n"
-        f"Heartbeat: every {config.poll_interval_seconds} seconds\n\n"
-        "Use the buttons below to view stats, inspect service status, or run quick actions."
+        f"Services online: {running_count}/3\n"
+        f"DB: {format_health(database_online)} | RA: {format_health(ra_online)}\n"
+        f"CPU: {stats['cpu_percent']}% | RAM: {stats['memory_percent']}% | Disk: {stats['disk_percent']}%\n"
+        f"Allowed users: {len(config.allowed_user_ids)} | Heartbeat: {config.poll_interval_seconds}s\n\n"
+        f"MySQL {format_status_chip(statuses['mysql'].running)} | "
+        f"Auth {format_status_chip(statuses['auth'].running)} | "
+        f"World {format_status_chip(statuses['world'].running)}\n\n"
+        "Use the buttons below to open a panel or run an action."
     )
+
+
+def format_health(is_online: bool) -> str:
+    return "online" if is_online else "offline"
+
+
+def format_status_chip(is_online: bool) -> str:
+    return "🟢" if is_online else "🔴"
 
 
 def build_quick_actions_text() -> str:
     return (
         "Quick Actions\n"
-        "Use ▶ to start a service and 🔄 to restart it.\n"
+        "Use ▶ to start, 🛑 to stop, and 🔄 to restart a service.\n"
         "Starting World will automatically ensure MySQL and Auth are running first."
+    )
+
+
+def build_remote_text() -> str:
+    return (
+        "🌐 Remote Access\n"
+        "Use RA-backed worldserver commands from here.\n"
+        "Available actions: server info, saveall, announce, shutdown, and account creation."
     )
 
 
@@ -281,7 +614,7 @@ def format_stats(stats: dict[str, float | str]) -> str:
     )
 
 
-def format_statuses(statuses: dict[str, object], database_online: bool) -> str:
+def format_statuses(statuses: dict[str, object], database_online: bool, ra_online: bool) -> str:
     updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     running_count = sum(1 for status in statuses.values() if status.running)
     lines = [
@@ -289,6 +622,7 @@ def format_statuses(statuses: dict[str, object], database_online: bool) -> str:
         f"Updated: {updated_at}",
         f"Services online: {running_count}/3",
         f"Database login check: {'online' if database_online else 'offline'}",
+        f"RA login check: {'online' if ra_online else 'offline'}",
         "",
     ]
     for key in ("mysql", "auth", "world"):
@@ -308,13 +642,34 @@ def format_statuses(statuses: dict[str, object], database_online: bool) -> str:
 
 
 def format_action_result(action: str, service_key: str, result_lines: list[str]) -> str:
-    verb = "Start" if action == "start" else "Restart"
+    verb = {
+        "start": "Start",
+        "stop": "Stop",
+        "restart": "Restart",
+    }.get(action, action.title())
     service_name = {
         "mysql": "MySQL",
         "auth": "AuthServer",
         "world": "WorldServer",
     }.get(service_key, service_key)
     return f"⚡ {verb} {service_name}\n\n" + "\n".join(f"• {line}" for line in result_lines)
+
+
+def format_service_confirmation(action: str, service_key: str) -> str:
+    verb = {
+        "stop": "stop",
+        "restart": "restart",
+    }.get(action, action)
+    service_name = {
+        "mysql": "MySQL",
+        "auth": "AuthServer",
+        "world": "WorldServer",
+    }.get(service_key, service_key)
+    return f"⚠ Confirm {verb.title()}\n\nDo you want to {verb} {service_name}?"
+
+
+def format_ra_result(title: str, output: str) -> str:
+    return f"🌐 {title}\n\n{output}".strip()
 
 
 def format_duration_from_timestamp(started_at: float | None) -> str:
@@ -343,6 +698,7 @@ def build_application(config: AppConfig) -> Application:
     monitor.seed_state()
     controller = ServerController(config, monitor=monitor)
     database = DatabaseClient(config.database)
+    remote_access = RemoteAccessClient(config.remote_access)
 
     application = ApplicationBuilder().token(config.bot_token).build()
     application.bot_data.update(
@@ -351,6 +707,7 @@ def build_application(config: AppConfig) -> Application:
             "monitor": monitor,
             "controller": controller,
             "database": database,
+            "remote_access": remote_access,
         }
     )
 
@@ -360,6 +717,7 @@ def build_application(config: AppConfig) -> Application:
     application.add_handler(CommandHandler("debugid", whoami_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     application.add_handler(CallbackQueryHandler(callback_router))
     application.add_error_handler(error_handler)
 
