@@ -117,12 +117,12 @@ Then go back to the bot chat and send:
 - `/start`
 - `/menu`
 
-That opens the main control panel with the inline buttons.
+That opens the main control panel with the inline buttons and enables the fixed reply-keyboard shortcuts for `🏠 Menu`, `🎮 Status`, `📊 Stats`, and `🌐 Remote`.
 
 Quick rule:
 
 - Before whitelist setup: `/whoami` and `/debugid` work
-- After whitelist setup and bot restart: `/start` and `/menu` show the buttons
+- After whitelist setup and bot restart: `/start` and `/menu` show the inline control panel and the fixed navigation keyboard
 
 ## 6. Recommended privacy settings
 

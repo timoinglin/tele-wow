@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
@@ -23,6 +23,23 @@ from ra import RemoteAccessClient, RemoteAccessError
 
 
 LOGGER = logging.getLogger(__name__)
+
+NAVIGATION_MENU_LABEL = "🏠 Menu"
+NAVIGATION_STATUS_LABEL = "🎮 Status"
+NAVIGATION_STATS_LABEL = "📊 Stats"
+NAVIGATION_REMOTE_LABEL = "🌐 Remote"
+
+
+def build_navigation_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [NAVIGATION_MENU_LABEL, NAVIGATION_STATUS_LABEL],
+            [NAVIGATION_STATS_LABEL, NAVIGATION_REMOTE_LABEL],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Choose a panel shortcut...",
+    )
 
 
 def build_main_menu() -> InlineKeyboardMarkup:
@@ -159,6 +176,21 @@ def remember_panel_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, mes
     context.user_data["panel_message_id"] = message_id
 
 
+async def ensure_navigation_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+
+    if context.user_data.get("navigation_keyboard_enabled"):
+        return
+
+    await message.reply_text(
+        "Navigation keyboard enabled. Use these fixed buttons to jump between safe panels.",
+        reply_markup=build_navigation_keyboard(),
+    )
+    context.user_data["navigation_keyboard_enabled"] = True
+
+
 async def render_panel(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -225,6 +257,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_authorized(update, config):
         return
 
+    await ensure_navigation_keyboard(update, context)
     text = await build_main_text(context)
     await render_panel(update, context, text, build_main_menu())
 
@@ -234,6 +267,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_authorized(update, config):
         return
 
+    await ensure_navigation_keyboard(update, context)
     controller = get_controller(context)
     stats = await asyncio.to_thread(controller.get_system_stats)
     await render_panel(update, context, format_stats(stats), build_stats_menu())
@@ -244,8 +278,13 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_authorized(update, config):
         return
 
+    await ensure_navigation_keyboard(update, context)
     statuses, database_online, ra_online = await get_status_snapshot(context)
     await render_panel(update, context, format_statuses(statuses, database_online, ra_online), build_status_menu())
+
+
+async def show_remote_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await render_panel(update, context, build_remote_text(), build_remote_menu())
 
 
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -258,6 +297,24 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     pending_action = context.user_data.get("pending_action")
+    if not pending_action:
+        if message.text == NAVIGATION_MENU_LABEL:
+            text = await build_main_text(context)
+            await render_panel(update, context, text, build_main_menu())
+            return
+        if message.text == NAVIGATION_STATUS_LABEL:
+            statuses, database_online, ra_online = await get_status_snapshot(context)
+            await render_panel(update, context, format_statuses(statuses, database_online, ra_online), build_status_menu())
+            return
+        if message.text == NAVIGATION_STATS_LABEL:
+            controller = get_controller(context)
+            stats = await asyncio.to_thread(controller.get_system_stats)
+            await render_panel(update, context, format_stats(stats), build_stats_menu())
+            return
+        if message.text == NAVIGATION_REMOTE_LABEL:
+            await show_remote_panel(update, context)
+            return
+
     if not pending_action:
         return
 

@@ -4,6 +4,22 @@ TeleWoW is a Windows-first Python Telegram bot for monitoring and controlling a 
 
 Clone this repository into the repack root directory. The repository folder must be named `tele-wow` and must sit next to `Repack` and `Database`. Relative paths in `.env` are resolved from the `tele-wow` folder, so the default paths intentionally use `../Repack` and `../Database`.
 
+Repository: https://github.com/timoinglin/tele-wow
+
+## Table of contents
+
+- [Features](#features)
+- [Preview](#preview)
+- [Project layout](#project-layout)
+- [Requirements](#requirements)
+- [Easy install](#easy-install)
+- [Manual setup](#manual-setup)
+- [Running the bot](#running-the-bot)
+- [Buttons](#buttons)
+- [Remote Access setup](#remote-access-setup)
+- [Operational notes](#operational-notes)
+- [License](#license)
+
 ## Features
 
 - Telegram bot with inline keyboard control panel
@@ -20,23 +36,28 @@ Clone this repository into the repack root directory. The repository folder must
 
 ## Preview
 
-![Main menu](screenshots/s1.jpg)
+![Main dashboard](screenshots/1_main_dashboard.jpg)
 
-![Status panel](screenshots/s2.jpg)
+![Server status](screenshots/2_server_status.jpg)
 
-![System stats or actions view](screenshots/s3.jpg)
+![Remote actions](screenshots/3_remote_actions.jpg)
+
+![Crash detected alert](screenshots/4_crash_detected.jpg)
 
 ## Project layout
 
 ```text
 tele-wow/
-  bot.py
-  config.py
-  database.py
-  monitor.py
+   bot.py
+   config.py
+   database.py
+   install_bot.bat
+   LICENSE
+   monitor.py
    ra.py
-  requirements.txt
-  .env.example
+   requirements.txt
+   start_bot.bat
+   .env.example
    screenshots/
    TELEGRAM_SETUP.md
 ```
@@ -49,7 +70,35 @@ tele-wow/
 - One or more Telegram numeric user IDs for the whitelist
 - A WoW repack root folder containing `Database` and `Repack`
 
-## Setup
+## Easy install
+
+Recommended for most users:
+
+```bat
+install_bot.bat
+```
+
+What the installer does:
+
+- Explains that it only installs the bot, not the WoW repack itself
+- Checks that `tele-wow` is placed beside `Database` and `Repack`
+- Checks for Python 3.11+ and installs it with `winget` if needed
+- Creates `.venv`
+- Activates `.venv`
+- Installs the required Python packages
+- Creates `.env` from `.env.example` if `.env` does not already exist
+
+What you still need to do after the installer finishes:
+
+1. Open [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md) and create your Telegram bot.
+2. Edit `.env` and fill in your Telegram values.
+3. Review the default `../Repack` and `../Database` paths in `.env`.
+4. Enable RA in `Repack\worldserver.conf` if you want Remote Access features.
+5. Start the bot with `start_bot.bat`.
+
+The installer does not overwrite an existing `.env`, and it reuses an existing `.venv` if one is already present.
+
+## Manual setup
 
 1. Clone this repository into your repack root folder and make sure your structure looks like this:
 
@@ -92,7 +141,20 @@ The default `.env.example` uses repo-relative paths such as `../Repack/worldserv
 python bot.py
 ```
 
+Windows launcher:
+
+```bat
+start_bot.bat
+```
+
 The bot polls Telegram, schedules a 15-second heartbeat, and sends crash alerts to the configured chat ID.
+
+`start_bot.bat` changes to the repo folder, activates `.venv`, and then runs `python bot.py`. This makes it suitable for double-click launch or for Windows Task Scheduler.
+
+Task Scheduler note:
+
+- Point the task to `start_bot.bat` inside the `tele-wow` folder
+- Set `Start in` to the `tele-wow` folder
 
 First run flow:
 
@@ -103,11 +165,13 @@ First run flow:
 5. Add that User ID to `TELEGRAM_ALLOWED_USER_IDS` in `.env`.
 6. Add that Chat ID to `TELEGRAM_ALERT_CHAT_ID` if you want alerts in that chat.
 7. Restart the bot.
-8. Send `/start` or `/menu` to open the button-based control panel.
+8. Send `/start` or `/menu` to open the control panel and enable the fixed navigation keyboard.
 
 Before the whitelist is configured, only `/whoami` and `/debugid` are expected to work.
 
 The bot tries to keep one main control-panel message updated instead of sending a new panel message for every action.
+
+After the first authorized `/start` or `/menu`, the bot also enables a fixed reply keyboard with safe shortcuts for `🏠 Menu`, `🎮 Status`, `📊 Stats`, and `🌐 Remote`.
 
 ## Buttons
 
@@ -116,6 +180,13 @@ The bot tries to keep one main control-panel message updated instead of sending 
 - `⚡ Quick Actions`: Start, stop, and restart shortcuts for the server processes
 - `🌐 Remote Access`: Run worldserver RA actions such as server info, saveall, announce, and shutdown
 - `👤 Account Creator`: Create a new WoW account through worldserver RA
+
+Fixed reply-keyboard shortcuts:
+
+- `🏠 Menu`: Return to the main dashboard panel
+- `🎮 Status`: Open the server status panel
+- `📊 Stats`: Open the system stats panel
+- `🌐 Remote`: Open the Remote Access panel
 
 Risky actions such as stop, restart, shutdown, and account creation use confirmation steps before the command is executed.
 
@@ -210,14 +281,14 @@ After the RA values are saved in `.env`:
    - `ℹ Server Info`
    - `💾 Save All`
    - `📣 Announce`
-   - `⏻ Shutdown`
+   - `🛑 Shutdown`
 
 For actions that need extra input, the bot will ask you to reply in chat.
 
 Examples:
 
 - `📣 Announce`: send the announcement text in chat
-- `⏻ Shutdown`: send the shutdown delay in seconds
+- `🛑 Shutdown`: send the shutdown delay in seconds
 
 You can send `cancel` during an input step to stop the current action.
 
@@ -228,6 +299,7 @@ You can send `cancel` during an input step to stop the current action.
 3. Press `➕ Create Account`
 4. Send the new username in chat
 5. Send the new password in chat
+6. Confirm the action when the bot asks
 
 The bot will call the worldserver account creation command through `RA`.
 
@@ -240,3 +312,7 @@ The bot will call the worldserver account creation command through `RA`.
 - Restarting MySQL also restarts dependent server processes in dependency order.
 - Unauthorized Telegram users are ignored unless their numeric ID appears in the whitelist.
 - Remote console features require RA to be enabled in `Repack\worldserver.conf` by setting `Ra.Enable = 1` in the `CONSOLE AND REMOTE ACCESS` section.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
