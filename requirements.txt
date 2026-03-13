@@ -1,0 +1,4 @@
+mysql-connector-python>=8.4,<10.0
+psutil>=5.9,<8.0
+python-dotenv>=1.0,<2.0
+python-telegram-bot[job-queue]>=20.8,<23.0
