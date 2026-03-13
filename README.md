@@ -35,15 +35,19 @@ Clone this repository into the repack root directory. The repository folder must
 
 ## Preview
 Main dashboard
+
 ![Main dashboard](screenshots/1_main_dashboard.jpg)
 
 Server status
+
 ![Server status](screenshots/2_server_status.jpg)
 
 Remote Access
+
 ![Remote actions](screenshots/3_remote_actions.jpg)
 
 Crash alert example
+
 ![Crash detected alert](screenshots/4_crash_detected.jpg)
 
 ## Project layout
