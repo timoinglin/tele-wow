@@ -36,19 +36,19 @@ Clone this repository into the repack root directory. The repository folder must
 ## Preview
 Main dashboard
 
-<img src="screenshots/1_main_dashboard.jpg" alt="Main dashboard" width="400"/>
+![Main dashboard](screenshots/1_main_dashboard.jpg)
 
 Server status
 
-<img src="screenshots/2_server_status.jpg" alt="Server status" width="400"/>
+![Server status](screenshots/2_server_status.jpg)
 
 Remote Access
 
-<img src="screenshots/3_remote_actions.jpg" alt="Remote actions" width="400"/>
+![Remote actions](screenshots/3_remote_actions.jpg)
 
 Crash alert example
 
-<img src="screenshots/4_crash_detected.jpg" alt="Crash detected alert" width="400"/>
+![Crash detected alert](screenshots/4_crash_detected.jpg)
 
 ## Project layout
 
