@@ -18,7 +18,7 @@ from telegram.ext import (
 
 from config import AppConfig, load_config
 from database import DatabaseClient
-from monitor import ProcessMonitor, ServerController
+from monitor import ProcessMonitor, ServerController, ServiceStatus
 from ra import RemoteAccessClient, RemoteAccessError
 
 
@@ -42,70 +42,78 @@ def build_navigation_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+SERVICE_DISPLAY_NAMES = {
+    "mysql": "MySQL",
+    "auth": "AuthServer",
+    "world": "WorldServer",
+}
+
+
 def build_main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("📊 System Stats", callback_data="menu:stats"),
                 InlineKeyboardButton("🎮 Server Status", callback_data="menu:status"),
+                InlineKeyboardButton("📊 System Stats", callback_data="menu:stats"),
             ],
             [
                 InlineKeyboardButton("⚡ Quick Actions", callback_data="menu:quick"),
                 InlineKeyboardButton("🌐 Remote Access", callback_data="menu:remote"),
             ],
-            [InlineKeyboardButton("👤 Account Creator", callback_data="menu:account")],
         ]
     )
 
 
 def build_stats_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🔄 Refresh Stats", callback_data="menu:stats")],
-            [
-                InlineKeyboardButton("🎮 Status", callback_data="menu:status"),
-                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
-            ],
-        ]
+        [[InlineKeyboardButton("🔄 Refresh Stats", callback_data="menu:stats")]]
     )
 
 
 def build_status_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🔄 Refresh Status", callback_data="menu:status")],
-            [
-                InlineKeyboardButton("⚡ Quick Actions", callback_data="menu:quick"),
-                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
-            ],
-        ]
+        [[InlineKeyboardButton("🔄 Refresh Status", callback_data="menu:status")]]
     )
 
 
-def build_quick_actions_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
+def build_quick_actions_menu(statuses: dict[str, ServiceStatus]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key in ("mysql", "auth", "world"):
+        status = statuses[key]
+        name = SERVICE_DISPLAY_NAMES[key]
+        if status.running:
+            label = f"🟢 {name} — manage"
+            rows.append([InlineKeyboardButton(label, callback_data=f"qa:service:{key}")])
+        else:
+            label = f"🔴 {name} — ▶ Start"
+            rows.append([InlineKeyboardButton(label, callback_data=f"action:start:{key}")])
+    rows.append([InlineKeyboardButton("🔁 Restart All", callback_data="confirm:restart_all")])
+    rows.append([InlineKeyboardButton("🔄 Refresh", callback_data="menu:quick")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_service_drill_menu(service_key: str, status: ServiceStatus) -> InlineKeyboardMarkup:
+    if status.running:
+        rows = [
             [
-                InlineKeyboardButton("▶ MySQL", callback_data="action:start:mysql"),
-                InlineKeyboardButton("🛑 MySQL", callback_data="confirm:service:stop:mysql"),
-                InlineKeyboardButton("🔄 MySQL", callback_data="confirm:service:restart:mysql"),
+                InlineKeyboardButton("🛑 Stop", callback_data=f"confirm:service:stop:{service_key}"),
+                InlineKeyboardButton("🔄 Restart", callback_data=f"confirm:service:restart:{service_key}"),
             ],
+            [InlineKeyboardButton("☠ Force Stop", callback_data=f"confirm:force_stop:{service_key}")],
             [
-                InlineKeyboardButton("▶ Auth", callback_data="action:start:auth"),
-                InlineKeyboardButton("🛑 Auth", callback_data="confirm:service:stop:auth"),
-                InlineKeyboardButton("🔄 Auth", callback_data="confirm:service:restart:auth"),
-            ],
-            [
-                InlineKeyboardButton("▶ World", callback_data="action:start:world"),
-                InlineKeyboardButton("🛑 World", callback_data="confirm:service:stop:world"),
-                InlineKeyboardButton("🔄 World", callback_data="confirm:service:restart:world"),
-            ],
-            [
-                InlineKeyboardButton("🎮 Status", callback_data="menu:status"),
-                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"qa:service:{service_key}"),
+                InlineKeyboardButton("⬅ Quick Actions", callback_data="menu:quick"),
             ],
         ]
-    )
+    else:
+        rows = [
+            [InlineKeyboardButton("▶ Start", callback_data=f"action:start:{service_key}")],
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"qa:service:{service_key}"),
+                InlineKeyboardButton("⬅ Quick Actions", callback_data="menu:quick"),
+            ],
+        ]
+    return InlineKeyboardMarkup(rows)
 
 
 def build_remote_menu() -> InlineKeyboardMarkup:
@@ -119,10 +127,8 @@ def build_remote_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📣 Announce", callback_data="ra:announce"),
                 InlineKeyboardButton("🛑 Shutdown", callback_data="ra:shutdown"),
             ],
-            [
-                InlineKeyboardButton("👤 Account Creator", callback_data="menu:account"),
-                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
-            ],
+            [InlineKeyboardButton("🔁 Graceful Restart", callback_data="ra:graceful_restart")],
+            [InlineKeyboardButton("👤 Account Creator", callback_data="menu:account")],
         ]
     )
 
@@ -131,11 +137,32 @@ def build_account_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("➕ Create Account", callback_data="ra:account_create")],
-            [
-                InlineKeyboardButton("🌐 Remote Access", callback_data="menu:remote"),
-                InlineKeyboardButton("⬅ Main", callback_data="menu:main"),
-            ],
+            [InlineKeyboardButton("🌐 Remote Access", callback_data="menu:remote")],
         ]
+    )
+
+
+def build_crash_alert_menu(service_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("▶ Start", callback_data=f"action:start:{service_key}"),
+                InlineKeyboardButton("🔄 Restart", callback_data=f"confirm:service:restart:{service_key}"),
+            ],
+            [InlineKeyboardButton("🎮 Open Status", callback_data="menu:status")],
+        ]
+    )
+
+
+def build_graceful_restart_progress_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⛔ Cancel Restart", callback_data="gr:cancel")]]
+    )
+
+
+def build_post_action_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⚡ Quick Actions", callback_data="menu:quick")]]
     )
 
 
@@ -287,6 +314,29 @@ async def show_remote_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await render_panel(update, context, build_remote_text(), build_remote_menu())
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    config: AppConfig = context.application.bot_data["config"]
+    if not is_authorized(update, config):
+        return
+    if update.effective_message is None:
+        return
+    text = (
+        "TeleWoW commands\n\n"
+        "/menu — main control panel\n"
+        "/status — server status panel\n"
+        "/stats — system stats panel\n"
+        "/whoami — show your Telegram User ID and Chat ID\n"
+        "/help — this message\n\n"
+        "Reply keyboard: 🏠 Menu | 🎮 Status | 📊 Stats | 🌐 Remote\n\n"
+        "Wizard tips:\n"
+        "• Send `cancel` at any text prompt to abort.\n"
+        "• Send `default` in the Graceful Restart wizard to use the configured defaults.\n"
+        "• Force Stop is hidden inside Quick Actions → tap a service.\n"
+        "• Crash alerts come with one-tap Restart and Status buttons."
+    )
+    await update.effective_message.reply_text(text)
+
+
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config: AppConfig = context.application.bot_data["config"]
     if not is_authorized(update, config):
@@ -327,12 +377,78 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     action_type = pending_action.get("type")
     if action_type == "announce_text":
-        context.user_data["pending_action"] = {"type": "announce_confirm", "text": text}
+        context.user_data.pop("pending_action", None)
+        result = await run_ra_command(context, f"announce {text}")
         await render_panel(
             update,
             context,
-            f"📣 Confirm Announce\n\n{text}",
-            build_confirm_menu("execute:ra:announce", "menu:remote"),
+            format_ra_result("Announce", result),
+            build_remote_menu(),
+        )
+        return
+
+    if action_type == "gr_delay":
+        config: AppConfig = context.application.bot_data["config"]
+        if text.lower() == "default":
+            delay = config.graceful_restart_default_delay
+        else:
+            try:
+                delay = int(text)
+            except ValueError:
+                await render_panel(
+                    update,
+                    context,
+                    "Send a positive integer in seconds, or `default`, or `cancel`.",
+                    build_remote_menu(),
+                )
+                return
+            if delay <= 0:
+                await render_panel(
+                    update,
+                    context,
+                    "Delay must be greater than zero. Send a number, `default`, or `cancel`.",
+                    build_remote_menu(),
+                )
+                return
+        context.user_data["pending_action"] = {"type": "gr_template", "delay": delay}
+        await render_panel(
+            update,
+            context,
+            (
+                f"🔁 Graceful Restart — delay {delay}s\n\n"
+                "Send the announcement template, or send `default` for:\n"
+                f"\"{config.graceful_restart_default_template}\"\n\n"
+                "The {minutes} token is replaced with the rounded countdown."
+            ),
+            build_remote_menu(),
+        )
+        return
+
+    if action_type == "gr_template":
+        config: AppConfig = context.application.bot_data["config"]
+        delay = pending_action.get("delay")
+        if not isinstance(delay, int):
+            context.user_data.pop("pending_action", None)
+            await render_panel(update, context, "Wizard state was lost. Start again.", build_remote_menu())
+            return
+        template = config.graceful_restart_default_template if text.lower() == "default" else text
+        context.user_data["pending_action"] = {
+            "type": "gr_confirm",
+            "delay": delay,
+            "template": template,
+        }
+        preview = render_announce_template(template, delay)
+        await render_panel(
+            update,
+            context,
+            (
+                "🔁 Confirm Graceful Restart\n\n"
+                f"Delay: {delay}s\n"
+                f"Announce: {preview}\n"
+                "Sequence: announce now → wait → save all → shutdown.\n"
+                "A 60s warning will be sent if the delay allows."
+            ),
+            build_confirm_menu("execute:ra:graceful_restart", "menu:remote"),
         )
         return
 
@@ -416,7 +532,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await query.answer()
-    remember_panel_message(context, query.message.chat_id, query.message.message_id)
+    if query.message is not None:
+        remember_panel_message(context, query.message.chat_id, query.message.message_id)
 
     if query.data == "menu:main":
         context.user_data.pop("pending_action", None)
@@ -426,7 +543,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if query.data == "menu:quick":
         context.user_data.pop("pending_action", None)
-        await query.edit_message_text(build_quick_actions_text(), reply_markup=build_quick_actions_menu())
+        await render_quick_actions_panel(query, context)
         return
 
     if query.data == "menu:remote":
@@ -455,11 +572,18 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         text = (
             "👤 Account Creator\n\n"
             "Create a new WoW account through Remote Access.\n"
-            "Press Create Account and then reply with the username and password in chat.\n"
+            "Press Create Account, then reply with the username and password in chat.\n"
             "You will get a confirmation step before the command is sent.\n"
-            "Send cancel at any prompt to stop."
+            "Send `cancel` at any prompt to stop.\n\n"
+            "Tip: long-press your username and password messages above and delete them after creation —\n"
+            "they sit in your chat history otherwise."
         )
         await query.edit_message_text(text, reply_markup=build_account_menu())
+        return
+
+    if query.data.startswith("qa:service:"):
+        service_key = query.data.split(":", 2)[2]
+        await render_service_drill(query, context, service_key)
         return
 
     if query.data == "ra:server_info":
@@ -475,7 +599,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query.data == "ra:announce":
         context.user_data["pending_action"] = {"type": "announce_text"}
         await query.edit_message_text(
-            "📣 Announce\n\nSend the announcement text in chat, or send cancel.",
+            "📣 Announce\n\nSend the announcement text in chat, or send `cancel`.",
             reply_markup=build_remote_menu(),
         )
         return
@@ -483,7 +607,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query.data == "ra:shutdown":
         context.user_data["pending_action"] = {"type": "shutdown_delay"}
         await query.edit_message_text(
-            "🛑 Shutdown\n\nSend the shutdown delay in seconds, or send cancel.",
+            "🛑 Shutdown\n\nSend the shutdown delay in seconds, or send `cancel`.",
             reply_markup=build_remote_menu(),
         )
         return
@@ -491,28 +615,75 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query.data == "ra:account_create":
         context.user_data["pending_action"] = {"type": "account_username"}
         await query.edit_message_text(
-            "👤 Account Creator\n\nSend the new account username in chat, or send cancel.",
+            "👤 Account Creator\n\nSend the new account username in chat, or send `cancel`.",
             reply_markup=build_account_menu(),
         )
         return
 
-    if query.data.startswith("confirm:service:"):
-        _, _, action, service_key = query.data.split(":", 3)
-        text = format_service_confirmation(action, service_key)
+    if query.data == "ra:graceful_restart":
+        if context.user_data.get("graceful_restart_state"):
+            await query.edit_message_text(
+                "🔁 A graceful restart is already running. Cancel it before starting a new one.",
+                reply_markup=build_graceful_restart_progress_menu(),
+            )
+            return
+        context.user_data["pending_action"] = {"type": "gr_delay"}
+        default_delay = config.graceful_restart_default_delay
         await query.edit_message_text(
-            text,
+            (
+                "🔁 Graceful Restart\n\n"
+                f"Send the announce-and-restart delay in seconds (default {default_delay}, "
+                "send a number, `default`, or `cancel`)."
+            ),
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    if query.data == "confirm:restart_all":
+        await query.edit_message_text(
+            format_restart_all_confirmation(),
+            reply_markup=build_confirm_menu("execute:restart_all", "menu:quick"),
+        )
+        return
+
+    if query.data == "execute:restart_all":
+        controller = get_controller(context)
+        result_lines = await asyncio.to_thread(controller.restart_all)
+        await query.edit_message_text(
+            format_restart_all_result(result_lines),
+            reply_markup=build_post_action_menu(),
+        )
+        return
+
+    if query.data.startswith("confirm:force_stop:"):
+        service_key = query.data.split(":", 2)[2]
+        await query.edit_message_text(
+            format_force_stop_confirmation(service_key),
             reply_markup=build_confirm_menu(
-                f"execute:service:{action}:{service_key}",
-                "menu:quick",
+                f"execute:force_stop:{service_key}",
+                f"qa:service:{service_key}",
             ),
         )
         return
 
-    if query.data == "execute:ra:announce":
-        pending_action = context.user_data.pop("pending_action", {})
-        announce_text = pending_action.get("text", "")
-        result = await run_ra_command(context, f"announce {announce_text}")
-        await query.edit_message_text(format_ra_result("Announce", result), reply_markup=build_remote_menu())
+    if query.data.startswith("execute:force_stop:"):
+        service_key = query.data.split(":", 2)[2]
+        controller = get_controller(context)
+        result_lines = await asyncio.to_thread(controller.force_stop_service, service_key)
+        text = format_action_result("force_stop", service_key, result_lines)
+        await query.edit_message_text(text, reply_markup=build_post_action_menu())
+        return
+
+    if query.data.startswith("confirm:service:"):
+        _, _, action, service_key = query.data.split(":", 3)
+        confirmation_text = format_service_confirmation(action, service_key)
+        await query.edit_message_text(
+            confirmation_text,
+            reply_markup=build_confirm_menu(
+                f"execute:service:{action}:{service_key}",
+                f"qa:service:{service_key}",
+            ),
+        )
         return
 
     if query.data.startswith("execute:ra:shutdown:"):
@@ -533,23 +704,61 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(format_ra_result("Account Create", result), reply_markup=build_account_menu())
         return
 
+    if query.data == "execute:ra:graceful_restart":
+        pending_action = context.user_data.pop("pending_action", {})
+        delay = pending_action.get("delay")
+        template = pending_action.get("template")
+        if not isinstance(delay, int) or not isinstance(template, str):
+            await query.edit_message_text(
+                "🔁 Graceful Restart state was lost. Start again from Remote Access.",
+                reply_markup=build_remote_menu(),
+            )
+            return
+        await start_graceful_restart(query, context, delay, template)
+        return
+
+    if query.data == "gr:cancel":
+        await cancel_graceful_restart(query, context)
+        return
+
     if query.data.startswith("execute:service:"):
         _, _, action, service_key = query.data.split(":", 3)
         controller = get_controller(context)
         result_lines = await asyncio.to_thread(run_service_action, controller, action, service_key)
-        text = format_action_result(action, service_key, result_lines)
-        await query.edit_message_text(text, reply_markup=build_quick_actions_menu())
+        result_text = format_action_result(action, service_key, result_lines)
+        await query.edit_message_text(result_text, reply_markup=build_post_action_menu())
         return
 
     if query.data.startswith("action:"):
         _, action, service_key = query.data.split(":", 2)
         controller = get_controller(context)
         result_lines = await asyncio.to_thread(run_service_action, controller, action, service_key)
-        text = format_action_result(action, service_key, result_lines)
-        await query.edit_message_text(text, reply_markup=build_quick_actions_menu())
+        result_text = format_action_result(action, service_key, result_lines)
+        await query.edit_message_text(result_text, reply_markup=build_post_action_menu())
         return
 
     await query.edit_message_text("Unknown action.", reply_markup=build_main_menu())
+
+
+async def render_quick_actions_panel(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    controller = get_controller(context)
+    statuses = await asyncio.to_thread(controller.get_service_statuses)
+    await query.edit_message_text(
+        build_quick_actions_text(statuses),
+        reply_markup=build_quick_actions_menu(statuses),
+    )
+
+
+async def render_service_drill(query, context: ContextTypes.DEFAULT_TYPE, service_key: str) -> None:
+    if service_key not in SERVICE_DISPLAY_NAMES:
+        await query.edit_message_text("Unknown service.", reply_markup=build_main_menu())
+        return
+    controller = get_controller(context)
+    status = await asyncio.to_thread(controller.get_service_detail, service_key)
+    await query.edit_message_text(
+        build_service_drill_text(status),
+        reply_markup=build_service_drill_menu(service_key, status),
+    )
 
 
 def run_service_action(controller: ServerController, action: str, service_key: str) -> list[str]:
@@ -578,7 +787,194 @@ async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"Service: {service.display_name}\n"
                 f"Process: {config.services[service.key].process_name}"
             ),
+            reply_markup=build_crash_alert_menu(service.key),
         )
+
+
+def render_announce_template(template: str, delay_seconds: int) -> str:
+    minutes = max(1, round(delay_seconds / 60))
+    try:
+        return template.format(minutes=minutes)
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+GRACEFUL_RESTART_WARNING_OFFSET_SECONDS = 60
+
+
+async def start_graceful_restart(query, context: ContextTypes.DEFAULT_TYPE, delay: int, template: str) -> None:
+    job_queue = context.application.job_queue
+    if job_queue is None:
+        await query.edit_message_text(
+            "🔁 Graceful Restart unavailable: bot job queue is not running.",
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    chat_id = query.message.chat_id if query.message is not None else context.user_data.get("panel_chat_id")
+    message_id = query.message.message_id if query.message is not None else context.user_data.get("panel_message_id")
+    user_id = query.from_user.id if query.from_user is not None else None
+    if chat_id is None or message_id is None or user_id is None:
+        await query.edit_message_text(
+            "🔁 Graceful Restart could not lock the panel. Try again from Remote Access.",
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    initial_announce = render_announce_template(template, delay)
+    announce_result = await run_ra_command(context, f"announce {initial_announce}")
+
+    job_data = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "user_id": user_id,
+        "delay": delay,
+        "template": template,
+    }
+
+    warn_seconds = delay - GRACEFUL_RESTART_WARNING_OFFSET_SECONDS
+    jobs: list[object] = []
+    if warn_seconds > 0:
+        warn_job = job_queue.run_once(
+            gr_warn_job,
+            when=warn_seconds,
+            data=job_data,
+            name=f"gr_warn_{user_id}",
+        )
+        jobs.append(warn_job)
+
+    execute_job = job_queue.run_once(
+        gr_execute_job,
+        when=delay,
+        data=job_data,
+        name=f"gr_execute_{user_id}",
+    )
+    jobs.append(execute_job)
+
+    context.user_data["graceful_restart_state"] = {
+        "jobs": jobs,
+        "delay": delay,
+        "template": template,
+        "started_at": datetime.now().timestamp(),
+    }
+
+    progress_text = (
+        "🔁 Graceful Restart in progress\n\n"
+        f"📣 Announced: {initial_announce}\n"
+        f"⏳ Waiting {delay}s before save and shutdown.\n\n"
+        f"RA reply: {announce_result}"
+    )
+    await query.edit_message_text(progress_text, reply_markup=build_graceful_restart_progress_menu())
+
+
+async def cancel_graceful_restart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = context.user_data.pop("graceful_restart_state", None)
+    if state is None:
+        await query.edit_message_text(
+            "🔁 No graceful restart is currently running.",
+            reply_markup=build_remote_menu(),
+        )
+        return
+
+    for job in state.get("jobs", []):
+        try:
+            job.schedule_removal()
+        except Exception:  # pragma: no cover - PTB internal state
+            LOGGER.exception("Failed to cancel graceful-restart job")
+
+    cancel_announce = "Server restart cancelled."
+    cancel_result = await run_ra_command(context, f"announce {cancel_announce}")
+    await query.edit_message_text(
+        (
+            "🔁 Graceful Restart cancelled\n\n"
+            f"📣 Announced: {cancel_announce}\n"
+            f"RA reply: {cancel_result}"
+        ),
+        reply_markup=build_remote_menu(),
+    )
+
+
+async def gr_warn_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    if job is None or not isinstance(job.data, dict):
+        return
+    data = job.data
+    warn_text = (
+        f"Final warning - server restart in {GRACEFUL_RESTART_WARNING_OFFSET_SECONDS} seconds. "
+        "Please log out now."
+    )
+    announce_result = await run_ra_command(context, f"announce {warn_text}")
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    if chat_id is None or message_id is None:
+        return
+    text = (
+        "🔁 Graceful Restart in progress\n\n"
+        f"📣 Final warning sent ({GRACEFUL_RESTART_WARNING_OFFSET_SECONDS}s).\n"
+        f"⏳ Save and shutdown imminent.\n\n"
+        f"RA reply: {announce_result}"
+    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=build_graceful_restart_progress_menu(),
+        )
+    except BadRequest:
+        pass
+
+
+async def gr_execute_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    if job is None or not isinstance(job.data, dict):
+        return
+    data = job.data
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    user_id = data.get("user_id")
+
+    monitor = get_monitor(context)
+    monitor.suppress("world", seconds=90)
+
+    saveall_result = await run_ra_command(context, "saveall")
+    if chat_id is not None and message_id is not None:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=(
+                    "🔁 Graceful Restart in progress\n\n"
+                    f"💾 Save All complete.\n"
+                    f"🛑 Sending shutdown 0...\n\n"
+                    f"RA reply: {saveall_result}"
+                ),
+            )
+        except BadRequest:
+            pass
+
+    shutdown_result = await run_ra_command(context, "server shutdown 0")
+    if chat_id is not None and message_id is not None:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=(
+                    "🔁 Graceful Restart complete\n\n"
+                    "💾 Save All sent.\n"
+                    "🛑 Shutdown sent.\n"
+                    "✅ Open Quick Actions to verify when WorldServer is back online.\n\n"
+                    f"RA reply: {shutdown_result}"
+                ),
+                reply_markup=build_post_action_menu(),
+            )
+        except BadRequest:
+            pass
+
+    if user_id is not None:
+        user_data = context.application.user_data.get(user_id)
+        if user_data is not None:
+            user_data.pop("graceful_restart_state", None)
 
 
 async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -609,24 +1005,23 @@ async def run_ra_command(context: ContextTypes.DEFAULT_TYPE, command: str) -> st
 
 
 async def build_main_text(context: ContextTypes.DEFAULT_TYPE) -> str:
-    config: AppConfig = context.application.bot_data["config"]
     controller = get_controller(context)
     (statuses, database_online, ra_online), stats = await asyncio.gather(
         get_status_snapshot(context),
         asyncio.to_thread(controller.get_system_stats),
     )
     running_count = sum(1 for status in statuses.values() if status.running)
+    updated_at = datetime.now().strftime("%H:%M:%S")
 
     return (
         "TeleWoW Control Panel\n"
+        f"Updated: {updated_at}\n\n"
         f"Services online: {running_count}/3\n"
         f"DB: {format_health(database_online)} | RA: {format_health(ra_online)}\n"
-        f"CPU: {stats['cpu_percent']}% | RAM: {stats['memory_percent']}% | Disk: {stats['disk_percent']}%\n"
-        f"Allowed users: {len(config.allowed_user_ids)} | Heartbeat: {config.poll_interval_seconds}s\n\n"
-        f"MySQL {format_status_chip(statuses['mysql'].running)} | "
-        f"Auth {format_status_chip(statuses['auth'].running)} | "
-        f"World {format_status_chip(statuses['world'].running)}\n\n"
-        "Use the buttons below to open a panel or run an action."
+        f"CPU: {stats['cpu_percent']}% | RAM: {stats['memory_percent']}% | Disk: {stats['disk_percent']}%\n\n"
+        f"MySQL {format_status_chip(statuses['mysql'].running)}  "
+        f"Auth {format_status_chip(statuses['auth'].running)}  "
+        f"World {format_status_chip(statuses['world'].running)}"
     )
 
 
@@ -638,19 +1033,40 @@ def format_status_chip(is_online: bool) -> str:
     return "🟢" if is_online else "🔴"
 
 
-def build_quick_actions_text() -> str:
+def build_quick_actions_text(statuses: dict[str, ServiceStatus]) -> str:
+    running_count = sum(1 for status in statuses.values() if status.running)
     return (
-        "Quick Actions\n"
-        "Use ▶ to start, 🛑 to stop, and 🔄 to restart a service.\n"
-        "Starting World will automatically ensure MySQL and Auth are running first."
+        "⚡ Quick Actions\n"
+        f"Services online: {running_count}/3\n\n"
+        "Tap a service to manage it. Offline services start with one tap.\n"
+        "Starting World will automatically ensure MySQL and Auth are running."
     )
 
 
 def build_remote_text() -> str:
     return (
         "🌐 Remote Access\n"
-        "Use RA-backed worldserver commands from here.\n"
-        "Available actions: server info, saveall, announce, shutdown, and account creation."
+        "RA-backed worldserver commands.\n\n"
+        "🔁 Graceful Restart announces, saves, and shuts down on a timer."
+    )
+
+
+def build_service_drill_text(status: ServiceStatus) -> str:
+    if not status.running:
+        return (
+            f"🎮 {status.display_name}\n"
+            "Status: 🔴 offline"
+        )
+    uptime = format_duration_from_timestamp(status.started_at)
+    cpu = "—" if status.cpu_percent is None else f"{status.cpu_percent}%"
+    memory = "—" if status.memory_mb is None else f"{status.memory_mb} MB"
+    return (
+        f"🎮 {status.display_name}\n"
+        "Status: 🟢 online\n"
+        f"PID: {status.pid}\n"
+        f"Uptime: {uptime}\n"
+        f"CPU: {cpu}\n"
+        f"RAM: {memory}"
     )
 
 
@@ -695,6 +1111,7 @@ def format_statuses(statuses: dict[str, object], database_online: bool, ra_onlin
             lines.append(f"🔴 {status.display_name}")
             lines.append("Status: offline")
         lines.append("")
+    lines.append("Open Quick Actions for per-service CPU and controls.")
     return "\n".join(lines)
 
 
@@ -703,13 +1120,14 @@ def format_action_result(action: str, service_key: str, result_lines: list[str])
         "start": "Start",
         "stop": "Stop",
         "restart": "Restart",
+        "force_stop": "Force Stop",
     }.get(action, action.title())
-    service_name = {
-        "mysql": "MySQL",
-        "auth": "AuthServer",
-        "world": "WorldServer",
-    }.get(service_key, service_key)
+    service_name = SERVICE_DISPLAY_NAMES.get(service_key, service_key)
     return f"⚡ {verb} {service_name}\n\n" + "\n".join(f"• {line}" for line in result_lines)
+
+
+def format_restart_all_result(result_lines: list[str]) -> str:
+    return "🔁 Restart All\n\n" + "\n".join(f"• {line}" for line in result_lines)
 
 
 def format_service_confirmation(action: str, service_key: str) -> str:
@@ -717,12 +1135,25 @@ def format_service_confirmation(action: str, service_key: str) -> str:
         "stop": "stop",
         "restart": "restart",
     }.get(action, action)
-    service_name = {
-        "mysql": "MySQL",
-        "auth": "AuthServer",
-        "world": "WorldServer",
-    }.get(service_key, service_key)
-    return f"⚠ Confirm {verb.title()}\n\nDo you want to {verb} {service_name}?"
+    service_name = SERVICE_DISPLAY_NAMES.get(service_key, service_key)
+    return f"⚠️ Confirm {verb.title()}\n\nDo you want to {verb} {service_name}?"
+
+
+def format_force_stop_confirmation(service_key: str) -> str:
+    service_name = SERVICE_DISPLAY_NAMES.get(service_key, service_key)
+    return (
+        "⚠️ Confirm Force Stop\n\n"
+        f"Force-kill {service_name}? Unsaved data may be lost.\n"
+        "Use this only if a graceful stop has hung."
+    )
+
+
+def format_restart_all_confirmation() -> str:
+    return (
+        "⚠️ Confirm Restart All\n\n"
+        "Restart MySQL, AuthServer, and WorldServer in dependency order?\n"
+        "Players will be disconnected."
+    )
 
 
 def format_ra_result(title: str, output: str) -> str:
@@ -774,6 +1205,7 @@ def build_application(config: AppConfig) -> Application:
     application.add_handler(CommandHandler("debugid", whoami_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     application.add_handler(CallbackQueryHandler(callback_router))
     application.add_error_handler(error_handler)

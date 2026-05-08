@@ -29,6 +29,7 @@ class ServiceStatus:
     pid: int | None
     started_at: float | None
     memory_mb: float | None
+    cpu_percent: float | None = None
 
 
 class ProcessMonitor:
@@ -106,6 +107,45 @@ class ServerController:
             )
         return statuses
 
+    def get_service_detail(self, service_key: str) -> ServiceStatus:
+        service = self._config.services[service_key]
+        process = find_process(service.process_name)
+        if process is None:
+            return ServiceStatus(
+                key=service.key,
+                display_name=service.display_name,
+                running=False,
+                pid=None,
+                started_at=None,
+                memory_mb=None,
+                cpu_percent=None,
+            )
+        try:
+            with process.oneshot():
+                started_at = process.create_time()
+                memory_mb = round(process.memory_info().rss / (1024 ** 2), 1)
+                pid = process.pid
+            cpu_percent = round(process.cpu_percent(interval=0.4), 1)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return ServiceStatus(
+                key=service.key,
+                display_name=service.display_name,
+                running=False,
+                pid=None,
+                started_at=None,
+                memory_mb=None,
+                cpu_percent=None,
+            )
+        return ServiceStatus(
+            key=service.key,
+            display_name=service.display_name,
+            running=True,
+            pid=pid,
+            started_at=started_at,
+            memory_mb=memory_mb,
+            cpu_percent=cpu_percent,
+        )
+
     def get_system_stats(self) -> dict[str, float | str]:
         disk_usage = psutil.disk_usage(str(self._config.monitor_disk_path))
         virtual_memory = psutil.virtual_memory()
@@ -149,6 +189,37 @@ class ServerController:
 
         service = self._config.services[service_key]
         return self._stop_single_service(service)
+
+    def restart_all(self) -> list[str]:
+        messages: list[str] = []
+        statuses = self.get_service_statuses()
+        if statuses["world"].running:
+            messages.extend(self._stop_single_service(self._config.world))
+        if statuses["auth"].running:
+            messages.extend(self._stop_single_service(self._config.auth))
+        if statuses["mysql"].running:
+            messages.extend(self._stop_single_service(self._config.mysql))
+        time.sleep(2)
+        messages.extend(self._start_single_service(self._config.mysql))
+        messages.extend(self._start_single_service(self._config.auth))
+        messages.extend(self._start_single_service(self._config.world))
+        return messages
+
+    def force_stop_service(self, service_key: str) -> list[str]:
+        service = self._config.services[service_key]
+        process = find_process(service.process_name)
+        if process is None:
+            return [f"{service.display_name} is not running."]
+
+        if self._monitor is not None:
+            self._monitor.suppress(service.key)
+
+        process.kill()
+        try:
+            process.wait(timeout=10)
+            return [f"Force-stopped {service.display_name}."]
+        except psutil.TimeoutExpired:
+            return [f"Force-stop timed out for {service.display_name}; kernel cleanup pending."]
 
     def _stop_mysql_stack(self) -> list[str]:
         messages: list[str] = []

@@ -26,9 +26,11 @@ Clone this repository into the repack root directory. The repository folder must
 - `.env`-driven configuration
 - Host stats for CPU, RAM, and disk usage
 - Process monitoring for `mysqld.exe`, `authserver.exe`, and `worldserver.exe`
-- Crash alerts when a tracked process transitions from running to stopped
-- Start, stop, and restart actions for MySQL, AuthServer, and WorldServer
+- Crash alerts with one-tap `▶ Start`, `🔄 Restart`, and `🎮 Open Status` buttons
+- Per-service drill-down panel with PID, CPU%, RAM, uptime, and `☠ Force Stop`
+- Start, stop, restart, force-stop, and `🔁 Restart All` actions
 - Remote Access actions for worldserver commands
+- `🔁 Graceful Restart` wizard: announce → 60s warning → save all → shutdown, with cancel
 - In-bot account creation through worldserver RA commands
 - Confirmation dialogs for risky actions
 - Cleaner dashboard-style main panel with reduced bot message clutter
@@ -181,20 +183,48 @@ After the first authorized `/start` or `/menu`, the bot also enables a fixed rep
 
 ## Buttons
 
-- `📊 System Stats`: CPU, RAM, and disk usage for the configured host path
-- `🎮 Server Status`: Running or stopped state for MySQL, AuthServer, and WorldServer
-- `⚡ Quick Actions`: Start, stop, and restart shortcuts for the server processes
-- `🌐 Remote Access`: Run worldserver RA actions such as server info, saveall, announce, and shutdown
-- `👤 Account Creator`: Create a new WoW account through worldserver RA
+Main panel (2x2 inline keyboard):
 
-Fixed reply-keyboard shortcuts:
+- `🎮 Server Status`: PID, uptime, and memory for MySQL, AuthServer, and WorldServer
+- `📊 System Stats`: host CPU, RAM, disk, and uptime for the monitored path
+- `⚡ Quick Actions`: per-service drill-down with Start, Stop, Restart, Force Stop, plus `🔁 Restart All`
+- `🌐 Remote Access`: RA-backed worldserver commands (`ℹ Server Info`, `💾 Save All`, `📣 Announce`, `🛑 Shutdown`, `🔁 Graceful Restart`, `👤 Account Creator`)
 
-- `🏠 Menu`: Return to the main dashboard panel
-- `🎮 Status`: Open the server status panel
-- `📊 Stats`: Open the system stats panel
-- `🌐 Remote`: Open the Remote Access panel
+Fixed reply-keyboard shortcuts (always visible):
 
-Risky actions such as stop, restart, shutdown, and account creation use confirmation steps before the command is executed.
+- `🏠 Menu`: return to the main dashboard panel
+- `🎮 Status`: open the server status panel
+- `📊 Stats`: open the system stats panel
+- `🌐 Remote`: open the Remote Access panel
+
+Quick Actions per-service rows:
+
+- Offline service: one-tap `▶ Start`
+- Online service: opens a drill-down with PID, CPU%, RAM, uptime, plus `🛑 Stop`, `🔄 Restart`, `☠ Force Stop`
+
+Slash commands:
+
+- `/start`, `/menu`: open the main panel and enable the reply keyboard
+- `/status`, `/stats`: jump straight to status or stats panels
+- `/whoami`, `/debugid`: print your Telegram User ID and Chat ID
+- `/help`: list commands and wizard tips
+
+Crash alerts include one-tap `▶ Start`, `🔄 Restart`, and `🎮 Open Status` buttons.
+
+Confirmation steps are required for stop, restart, force-stop, shutdown, restart-all, graceful-restart, and account-creation. Announce sends immediately without a confirmation step.
+
+### Graceful Restart wizard
+
+`🌐 Remote Access > 🔁 Graceful Restart` chains an announce, a 60-second final warning, a `saveall`, and a `server shutdown 0`. The wizard prompts for a delay (in seconds) and an announcement template — send `default` to use the values from `.env`. While running, the panel shows progress and offers `⛔ Cancel Restart`, which sends a "restart cancelled" announcement and removes the pending jobs.
+
+Defaults are configured via:
+
+```text
+GRACEFUL_RESTART_DEFAULT_DELAY_SECONDS=300
+GRACEFUL_RESTART_DEFAULT_TEMPLATE=Server restart in {minutes} minutes - please log out safely.
+```
+
+The `{minutes}` token is replaced with the rounded countdown.
 
 ## Remote Access setup
 
@@ -288,13 +318,16 @@ After the RA values are saved in `.env`:
    - `💾 Save All`
    - `📣 Announce`
    - `🛑 Shutdown`
+   - `🔁 Graceful Restart`
+   - `👤 Account Creator`
 
 For actions that need extra input, the bot will ask you to reply in chat.
 
 Examples:
 
-- `📣 Announce`: send the announcement text in chat
-- `🛑 Shutdown`: send the shutdown delay in seconds
+- `📣 Announce`: send the announcement text in chat (no confirmation step — broadcasts immediately)
+- `🛑 Shutdown`: send the shutdown delay in seconds, then confirm
+- `🔁 Graceful Restart`: send the delay in seconds (or `default`), then the announcement template (or `default`), then confirm
 
 You can send `cancel` during an input step to stop the current action.
 
@@ -308,6 +341,8 @@ You can send `cancel` during an input step to stop the current action.
 6. Confirm the action when the bot asks
 
 The bot will call the worldserver account creation command through `RA`.
+
+Note: your username and password messages remain in your Telegram chat history. Long-press them and delete after creation if you do not want them to persist.
 
 `RA` is not used to start or stop Windows processes like `mysqld.exe`, `authserver.exe`, or `worldserver.exe`. Those actions stay in the local process-control layer.
 

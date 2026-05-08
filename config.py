@@ -43,6 +43,8 @@ class AppConfig:
     alert_chat_id: int
     poll_interval_seconds: int
     monitor_disk_path: Path
+    graceful_restart_default_delay: int
+    graceful_restart_default_template: str
     database: DatabaseConfig
     remote_access: RemoteAccessConfig
     mysql: ServiceConfig
@@ -115,6 +117,11 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         _require_env("MONITOR_DISK_PATH", ".."),
         base_path=repo_root,
     )
+    graceful_restart_default_delay = _load_int("GRACEFUL_RESTART_DEFAULT_DELAY_SECONDS", 300)
+    graceful_restart_default_template = _require_env(
+        "GRACEFUL_RESTART_DEFAULT_TEMPLATE",
+        "Server restart in {minutes} minutes - please log out safely.",
+    )
 
     database = DatabaseConfig(
         host=_require_env("DB_HOST", "127.0.0.1"),
@@ -166,6 +173,8 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         alert_chat_id=alert_chat_id,
         poll_interval_seconds=poll_interval_seconds,
         monitor_disk_path=monitor_disk_path,
+        graceful_restart_default_delay=graceful_restart_default_delay,
+        graceful_restart_default_template=graceful_restart_default_template,
         database=database,
         remote_access=remote_access,
         mysql=ServiceConfig(
