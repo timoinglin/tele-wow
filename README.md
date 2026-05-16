@@ -4,6 +4,10 @@ TeleWoW is a Windows-first Python Telegram bot for monitoring and controlling a 
 
 Clone this repository into the repack root directory. The repository folder must be named `tele-wow` and must sit next to `Repack` and `Database`. Relative paths in `.env` are resolved from the `tele-wow` folder, so the default paths intentionally use `../Repack` and `../Database`.
 
+> 💛 **Running TeleWoW on your repack?** It's free and open-source, built and maintained in spare time. If it's saved you time monitoring your server — or you'd like to see it keep growing — a coffee genuinely helps. See [Support the Project](#support-the-project).
+>
+> [![Support the project on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kneuma)
+
 
 ## Table of contents
 
@@ -17,6 +21,7 @@ Clone this repository into the repack root directory. The repository folder must
 - [Buttons](#buttons)
 - [Remote Access setup](#remote-access-setup)
 - [Operational notes](#operational-notes)
+- [Support the Project](#support-the-project)
 - [License](#license)
 
 ## Features
@@ -353,6 +358,14 @@ Note: your username and password messages remain in your Telegram chat history. 
 - Restarting MySQL also restarts dependent server processes in dependency order.
 - Unauthorized Telegram users are ignored unless their numeric ID appears in the whitelist.
 - Remote console features require RA to be enabled in `Repack\worldserver.conf` by setting `Ra.Enable = 1` in the `CONSOLE AND REMOTE ACCESS` section.
+
+## Support the Project
+
+This project is free and open-source, built and maintained in spare time. If it's saved you time setting up or running your server — or you'd just like to see it keep growing — a coffee is hugely appreciated and helps keep the WoW repack tools maintained and improving.
+
+[![Support the project on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kneuma)
+
+Every contribution also funds more free tools for the MoP / Cata repack community — thank you! 💛
 
 ## License
 
