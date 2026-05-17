@@ -1,5 +1,14 @@
 # TeleWoW MoP Controller
 
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white" alt="Platform: Windows">
+  <img src="https://img.shields.io/badge/python--telegram--bot-20.8%2B-26A5E4?logo=telegram&logoColor=white" alt="python-telegram-bot 20.8+">
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
+</p>
+
 TeleWoW is a Windows-first Python Telegram bot for monitoring and controlling a local EmuCoach or TrinityCore Mists of Pandaria repack.
 
 Clone this repository into the repack root directory. The repository folder must be named `tele-wow` and must sit next to `Repack` and `Database`. Relative paths in `.env` are resolved from the `tele-wow` folder, so the default paths intentionally use `../Repack` and `../Database`.
@@ -20,6 +29,7 @@ Clone this repository into the repack root directory. The repository folder must
 - [Running the bot](#running-the-bot)
 - [Buttons](#buttons)
 - [Remote Access setup](#remote-access-setup)
+- [Auto-restart on crash](#auto-restart-on-crash)
 - [Operational notes](#operational-notes)
 - [Support the Project](#support-the-project)
 - [License](#license)
@@ -32,6 +42,7 @@ Clone this repository into the repack root directory. The repository folder must
 - Host stats for CPU, RAM, and disk usage
 - Process monitoring for `mysqld.exe`, `authserver.exe`, and `worldserver.exe`
 - Crash alerts with one-tap `▶ Start`, `🔄 Restart`, and `🎮 Open Status` buttons
+- Optional `AUTO_RESTART_ON_CRASH` that recovers a crashed service plus its downstream dependents
 - Per-service drill-down panel with PID, CPU%, RAM, uptime, and `☠ Force Stop`
 - Start, stop, restart, force-stop, and `🔁 Restart All` actions
 - Remote Access actions for worldserver commands
@@ -351,11 +362,28 @@ Note: your username and password messages remain in your Telegram chat history. 
 
 `RA` is not used to start or stop Windows processes like `mysqld.exe`, `authserver.exe`, or `worldserver.exe`. Those actions stay in the local process-control layer.
 
+## Auto-restart on crash
+
+Set `AUTO_RESTART_ON_CRASH=true` in `.env` to make the bot recover crashed services automatically. It accepts `true/false` (also `1/0`, `yes/no`, `on/off`) and defaults to `false`.
+
+When enabled, the bot restarts a down service **and everything downstream of it**, in dependency order. This includes a service that is **already down when the bot starts** — it does not need to witness the crash:
+
+| Down service | Restarted |
+|--------------|-----------|
+| `mysql`      | MySQL, AuthServer, WorldServer |
+| `auth`       | AuthServer, WorldServer |
+| `world`      | WorldServer |
+
+The crash alert changes to `⚠️ CRASH DETECTED — trying to restart`, then updates in place to `✅ Auto-restart complete` or a failure notice with the per-step log. The bot retries a service up to 3 times; after that it posts `❌ Auto-restart failed after 3 attempts — manual action needed` and stays quiet for that service until it is healthy again, so a permanently broken service cannot spam the chat. Manual `▶ Start` / `🔄 Restart` / `🎮 Open Status` buttons remain on the message.
+
+When `AUTO_RESTART_ON_CRASH=false` the original behaviour applies: one crash alert per service with manual recovery buttons and no automatic action.
+
 ## Operational notes
 
 - MySQL is launched through `Database\_Server\MySQL.bat` by default to match the existing repack tooling.
 - AuthServer and WorldServer are launched from the `Repack` folder because their config and data directories are relative.
 - Restarting MySQL also restarts dependent server processes in dependency order.
+- `AUTO_RESTART_ON_CRASH` recovers a crashed service plus its downstream dependents; see [Auto-restart on crash](#auto-restart-on-crash).
 - Unauthorized Telegram users are ignored unless their numeric ID appears in the whitelist.
 - Remote console features require RA to be enabled in `Repack\worldserver.conf` by setting `Ra.Enable = 1` in the `CONSOLE AND REMOTE ACCESS` section.
 

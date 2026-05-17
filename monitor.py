@@ -13,6 +13,14 @@ from config import AppConfig, ServiceConfig
 
 CREATE_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
 
+# A crash cascades downstream: a crashed service plus everything that
+# depends on it must be restarted, in dependency order.
+CRASH_RECOVERY_CHAIN: dict[str, tuple[str, ...]] = {
+    "mysql": ("mysql", "auth", "world"),
+    "auth": ("auth", "world"),
+    "world": ("world",),
+}
+
 
 @dataclass(frozen=True)
 class ProcessInfo:
@@ -77,6 +85,43 @@ class ProcessMonitor:
             self._last_state[service.key] = False
 
         return crashed_services
+
+    def detect_down_services(self) -> list[ServiceStatus]:
+        """Report every service that is currently not running.
+
+        Unlike detect_crashes, this does not require a running -> stopped
+        transition, so a service that was already down when the bot
+        started is still reported. Used by the auto-restart path so the
+        bot heals a down service even if it never witnessed the crash.
+        Suppression windows are still honoured.
+        """
+        down_services: list[ServiceStatus] = []
+        now = time.time()
+
+        for service in self._config.services.values():
+            is_running = find_process(service.process_name) is not None
+            suppressed_until = self._suppressed_until.get(service.key, 0.0)
+
+            if is_running:
+                self._last_state[service.key] = True
+                continue
+
+            if suppressed_until > now:
+                continue
+
+            down_services.append(
+                ServiceStatus(
+                    key=service.key,
+                    display_name=service.display_name,
+                    running=False,
+                    pid=None,
+                    started_at=None,
+                    memory_mb=None,
+                )
+            )
+            self._last_state[service.key] = False
+
+        return down_services
 
 
 class ServerController:
@@ -204,6 +249,36 @@ class ServerController:
         messages.extend(self._start_single_service(self._config.auth))
         messages.extend(self._start_single_service(self._config.world))
         return messages
+
+    def recover_from_crash(self, root_key: str) -> tuple[list[str], list[str]]:
+        """Restart a crashed service and every dependent below it.
+
+        Unlike restart_*_stack, this does not try to preserve the
+        previous running set: after a crash the dependents are down or
+        unreliable, so the whole downstream chain is brought back up.
+        Returns (targets, message lines).
+        """
+        targets = list(CRASH_RECOVERY_CHAIN[root_key])
+
+        if self._monitor is not None:
+            for key in targets:
+                # Cover the whole stop/start cascade and settle time so
+                # the next heartbeat does not re-alert on transient state.
+                self._monitor.suppress(key, seconds=60)
+
+        messages: list[str] = []
+        statuses = self.get_service_statuses()
+        running_targets = [key for key in targets if statuses[key].running]
+
+        for key in reversed(targets):
+            if statuses[key].running:
+                messages.extend(self._stop_single_service(self._config.services[key]))
+        if running_targets:
+            time.sleep(2)
+
+        for key in targets:
+            messages.extend(self._start_single_service(self._config.services[key]))
+        return targets, messages
 
     def force_stop_service(self, service_key: str) -> list[str]:
         service = self._config.services[service_key]

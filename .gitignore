@@ -27,4 +27,5 @@ dist/
 
 # Editor settings
 .vscode/
+.claude/
 .idea/

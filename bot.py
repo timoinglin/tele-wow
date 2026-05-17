@@ -18,7 +18,7 @@ from telegram.ext import (
 
 from config import AppConfig, load_config
 from database import DatabaseClient
-from monitor import ProcessMonitor, ServerController, ServiceStatus
+from monitor import CRASH_RECOVERY_CHAIN, ProcessMonitor, ServerController, ServiceStatus
 from ra import RemoteAccessClient, RemoteAccessError
 
 
@@ -771,24 +771,109 @@ def run_service_action(controller: ServerController, action: str, service_key: s
     raise ValueError(f"Unsupported action: {action}")
 
 
+AUTO_RESTART_MAX_ATTEMPTS = 3
+DEPENDENCY_ORDER = ("mysql", "auth", "world")
+
+
 async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     monitor = get_monitor(context)
-    crashed_services = await asyncio.to_thread(monitor.detect_crashes)
+    config: AppConfig = context.application.bot_data["config"]
+    attempts: dict[str, int] = context.application.bot_data.setdefault("auto_restart_attempts", {})
 
-    if not crashed_services:
+    if not config.auto_restart_on_crash:
+        # Transition-only detection so the bot does not alert on startup
+        # for services the operator intentionally keeps off.
+        crashed_services = await asyncio.to_thread(monitor.detect_crashes)
+        for service in crashed_services:
+            await context.bot.send_message(
+                chat_id=config.alert_chat_id,
+                text=(
+                    "⚠️ CRASH DETECTED\n"
+                    f"Service: {service.display_name}\n"
+                    f"Process: {config.services[service.key].process_name}"
+                ),
+                reply_markup=build_crash_alert_menu(service.key),
+            )
         return
 
-    config: AppConfig = context.application.bot_data["config"]
-    for service in crashed_services:
-        await context.bot.send_message(
-            chat_id=config.alert_chat_id,
-            text=(
-                "⚠️ CRASH DETECTED\n"
-                f"Service: {service.display_name}\n"
-                f"Process: {config.services[service.key].process_name}"
-            ),
-            reply_markup=build_crash_alert_menu(service.key),
+    # Auto-restart mode: heal any down service, including one that was
+    # already down when the bot started (no transition required).
+    controller = get_controller(context)
+    statuses = await asyncio.to_thread(controller.get_service_statuses)
+
+    # Reset the retry counter only for services confirmed running again.
+    # Do NOT clear on an empty down-list: a service can be hidden by its
+    # post-recovery suppression window while still actually down.
+    for key in DEPENDENCY_ORDER:
+        if statuses[key].running:
+            attempts.pop(key, None)
+
+    down_services = await asyncio.to_thread(monitor.detect_down_services)
+    if not down_services:
+        return
+
+    if context.application.bot_data.get("recovery_in_progress"):
+        return
+
+    down_keys = {service.key for service in down_services}
+    root_key = next(key for key in DEPENDENCY_ORDER if key in down_keys)
+
+    if attempts.get(root_key, 0) >= AUTO_RESTART_MAX_ATTEMPTS:
+        # Already gave up and told the user; stay silent until it recovers.
+        return
+
+    attempt_number = attempts.get(root_key, 0) + 1
+    attempts[root_key] = attempt_number
+
+    targets = list(CRASH_RECOVERY_CHAIN[root_key])
+    target_names = ", ".join(config.services[key].display_name for key in targets)
+    root_name = config.services[root_key].display_name
+
+    alert_message = await context.bot.send_message(
+        chat_id=config.alert_chat_id,
+        text=(
+            "⚠️ CRASH DETECTED — trying to restart\n"
+            f"Service: {root_name}\n"
+            f"Process: {config.services[root_key].process_name}\n\n"
+            f"🔄 Auto-restart enabled (attempt {attempt_number}/{AUTO_RESTART_MAX_ATTEMPTS}).\n"
+            f"Restarting: {target_names}..."
+        ),
+    )
+
+    context.application.bot_data["recovery_in_progress"] = True
+    try:
+        _, result_lines = await asyncio.to_thread(controller.recover_from_crash, root_key)
+        statuses = await asyncio.to_thread(controller.get_service_statuses)
+    finally:
+        context.application.bot_data["recovery_in_progress"] = False
+
+    all_up = all(statuses[key].running for key in targets)
+    if all_up:
+        attempts.pop(root_key, None)
+        header = "✅ Auto-restart complete"
+    elif attempt_number >= AUTO_RESTART_MAX_ATTEMPTS:
+        header = (
+            f"❌ Auto-restart failed after {AUTO_RESTART_MAX_ATTEMPTS} attempts — "
+            "manual action needed"
         )
+    else:
+        header = "⚠️ Auto-restart attempted — service still down, will retry"
+
+    body = "\n".join(f"• {line}" for line in result_lines) or "• No output."
+    try:
+        await context.bot.edit_message_text(
+            chat_id=alert_message.chat_id,
+            message_id=alert_message.message_id,
+            text=(
+                f"{header}\n"
+                f"Root cause: {root_name}\n"
+                f"Restarted: {target_names}\n\n"
+                f"{body}"
+            ),
+            reply_markup=build_crash_alert_menu(root_key),
+        )
+    except BadRequest:
+        pass
 
 
 def render_announce_template(template: str, delay_seconds: int) -> str:

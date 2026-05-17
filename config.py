@@ -43,6 +43,7 @@ class AppConfig:
     alert_chat_id: int
     poll_interval_seconds: int
     monitor_disk_path: Path
+    auto_restart_on_crash: bool
     graceful_restart_default_delay: int
     graceful_restart_default_template: str
     database: DatabaseConfig
@@ -74,6 +75,13 @@ def _load_int(name: str, default: int | None = None) -> int:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"Environment variable {name} must be an integer") from exc
+
+
+def _load_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_allowed_user_ids() -> tuple[int, ...]:
@@ -117,6 +125,7 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         _require_env("MONITOR_DISK_PATH", ".."),
         base_path=repo_root,
     )
+    auto_restart_on_crash = _load_bool("AUTO_RESTART_ON_CRASH", False)
     graceful_restart_default_delay = _load_int("GRACEFUL_RESTART_DEFAULT_DELAY_SECONDS", 300)
     graceful_restart_default_template = _require_env(
         "GRACEFUL_RESTART_DEFAULT_TEMPLATE",
@@ -173,6 +182,7 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         alert_chat_id=alert_chat_id,
         poll_interval_seconds=poll_interval_seconds,
         monitor_disk_path=monitor_disk_path,
+        auto_restart_on_crash=auto_restart_on_crash,
         graceful_restart_default_delay=graceful_restart_default_delay,
         graceful_restart_default_template=graceful_restart_default_template,
         database=database,
