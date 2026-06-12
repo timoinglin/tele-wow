@@ -1,3 +1,10 @@
+> ### 🐉 New from me — **WOW Legends**: a free WotLK 3.3.5a repack
+> From the maker of TeleWoW: run your own living **Wrath of the Lich King (3.3.5a)** world in a few clicks — hundreds of AI-driven bots, an AI companion that chats back, hardcore mode, and a one-click installer.
+>
+> **▶ Check it out → [wow-legends.eu](https://wow-legends.eu)**
+
+---
+
 # TeleWoW MoP Controller
 
 <p align="center">
